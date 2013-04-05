@@ -19,10 +19,13 @@ class SCC_1080 {
 		void rightLinePrint(String input);
 		void kbEnable();
 		void kbDisable();
+		void escReset();
 		void gotoLine(int line);
 		void bargraph(int input);
 		void cursorOn();
 		void cursorOff();
+		void mdbStart();
+		void mdbEnd();
 
 		static void rs485init(HardwareSerial &port, long rate, int pin);
 		static void rs485tx(int pin);
@@ -30,8 +33,7 @@ class SCC_1080 {
 	private:
 		HardwareSerial *_port;
 		int _id;
-		void mdbStart();
-		void mdbEnd();
+
 };
 
 

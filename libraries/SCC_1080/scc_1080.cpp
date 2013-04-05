@@ -58,6 +58,7 @@ void SCC_1080::mdbStart() {
 void SCC_1080::mdbEnd() {
 	if (_id != -1)
  		(*_port).write(0x04); //end address
+		(*_port).flush();	//for reading
 }
 
 void SCC_1080::centerLinePrint(String input) {
@@ -123,6 +124,14 @@ void SCC_1080::kbEnable() {
   //enables keypad
   (*_port).write(0x1b); //escape code
   (*_port).write(0x32);
+  mdbEnd();
+}
+
+void SCC_1080::escReset() {
+  mdbStart();
+  //resets display
+  (*_port).write(0x1b); //escape code
+  (*_port).write(0x30);
   mdbEnd();
 }
 
