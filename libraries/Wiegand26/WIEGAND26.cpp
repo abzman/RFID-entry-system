@@ -2,13 +2,10 @@
 
 extern byte reader1Pins[];          // Reader 1 connected to pins 4,5
 extern byte reader2Pins[];          // Reader2 connected to pins 6,7
-extern byte reader3Pins[];          // Reader3 connected to pins X,Y
 extern long reader1;
 extern int  reader1Count;
 extern long reader2;
 extern int  reader2Count;
-extern long reader3;
-extern int reader3Count;
 
 
 WIEGAND26::WIEGAND26(){
@@ -20,7 +17,7 @@ WIEGAND26::~WIEGAND26(){
 
 
 /* Wiegand Reader code. Modify as needed or comment out unused readers.
- *  system supports up to 3 independent readers.
+ *  system supports up to 2 independent readers.
  */
 
 
@@ -85,34 +82,3 @@ void  WIEGAND26::reader2Zero(void) {
     reader2 = reader2 << 1;  
   }
 }
-
-
-
-void  WIEGAND26::initReaderThree(void) {
- for(byte i=0; i<2; i++){
- pinMode(reader3Pins[i], OUTPUT);
- digitalWrite(reader3Pins[i], HIGH); // enable internal pull up causing a one
- digitalWrite(reader3Pins[i], LOW); // disable internal pull up causing zero and thus an interrupt
- pinMode(reader3Pins[i], INPUT);
- digitalWrite(reader3Pins[i], HIGH); // enable internal pull up
- }
- delay(10);
- reader3Count=0;
- reader3=0;
- }
- 
- void  WIEGAND26::reader3One(void) {
- if(digitalRead(reader3Pins[1]) == LOW){
- reader3Count++;
- reader3 = reader3 << 1;
- reader3 |= 1;
- }
- }
- 
- void  WIEGAND26::reader3Zero(void) {
- if(digitalRead(reader3Pins[0]) == LOW){
- reader3Count++;
- reader3 = reader3 << 1;  
- }
- }
- 
