@@ -1,11 +1,11 @@
 //Printer Pins
-const int dataPins[] = {22,23,24,25,26,27,28,29};
+const int dataPins[] = {41,42,43,44,45,46,47,48};
 const int strobePin = 39;//active low
 //const int lineFeedPin = 40;//active low
 //const int errorPin = 41;
 //const int resetPin = 42;
 //const int ackPin = 43;
-const int busyPin = 44;//active low
+const int busyPin = 40;//active low
 //const int paperOutPin = 45;
 //const int selPin = 46;//high if printer is on
 
@@ -35,27 +35,25 @@ void setup() {
 
 void loop() {
   if (Serial.available() > 0) {
-    buffer = Serial.read();
-    
-    //Write out our buffer
-    for (int i = 0; i < sizeof(dataPins) / sizeof(dataPins[0]); ++i)
-      digitalWrite(dataPins[i], (buffer & (1 << i)));
-    buffer = 0x00;
-    
-    //Block and wait for the printer to be ready
-    while (digitalRead(busyPin));
-    
-    //Tell the printer to write out the data
-    digitalWrite(strobePin, LOW);
-    delay(10);
-    digitalWrite(strobePin, HIGH);
-    
-    //Wait for an acknolidge from the printer
-    //while (digitalRead(ackPin));
-    //delay(5);
-    
-    //Reset the data lines
-    for (int i = 0; i < sizeof(dataPins) / sizeof(dataPins[0]); ++i) 
-      digitalWrite(dataPins[i], LOW);
+    printer(Serial.read());
   }
+}
+void printer(char buffer)
+{
+	//Write out our buffer
+	for (int j = 0; j < sizeof(dataPins) / sizeof(dataPins[0]); ++j)
+		digitalWrite(dataPins[j], (buffer & (1 << j)));
+	//buffer = 0x00;
+    
+	//Block and wait for the printer to be ready
+	while (digitalRead(busyPin));
+    
+	//Tell the printer to write out the data
+	digitalWrite(strobePin, LOW);
+	delay(10);
+	digitalWrite(strobePin, HIGH);
+    
+	//Reset the data lines
+	for (int j = 0; j < sizeof(dataPins) / sizeof(dataPins[0]); ++j) 
+		digitalWrite(dataPins[j], LOW);
 }
