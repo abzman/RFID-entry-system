@@ -31,6 +31,7 @@ void loop() {
   if(Serial3.available() > 0){
     Serial.print(Serial3.read(),HEX);
     Serial.println();
+    //delay(1000);
   }
   //delay(200);
 } 
