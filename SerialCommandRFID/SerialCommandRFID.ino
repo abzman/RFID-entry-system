@@ -1,26 +1,26 @@
-// <major mod from> Demo Code for SerialCommand Library
-// Steven Cogswell
-// May 2011
-// start of test code for RFID project
+// RFID project
 // i3 Detroit
 // Evan Allen
+// June 2013
+
+
 #include <MD5.h>
 
-#include <scc_1080.h>
-HardwareSerial *mySerial = &Serial3;
-SCC_1080 inside(*mySerial,1);
-SCC_1080 outside(*mySerial,2);
-SCC_1080 all(*mySerial,0);
 
+//library to allow it to take commands from serial
 #include <SerialCommand.h>
 SerialCommand SCmd;   // The demo SerialCommand object
 
+
+//I2C stuff
 #include <Wire.h>         // Needed for I2C Connection to the DS1307 date/time chip
 #include <DS1307.h>       // DS1307 RTC Clock/Date/Time chip library
 #include <E24C1024.h>     // Needed for the onboard EEprom
 uint8_t second, minute, hour, dayOfWeek, dayOfMonth, month, year;     // Global RTC clock variables. Can be set using DS1307.getDate function.
 DS1307 ds1307;        // RTC Instance
 
+
+//RFID reader stuff
 #include <WIEGAND26.h>    // Wiegand 26 reader format libary
 byte reader1Pins[]={19,18};          // Reader 1 connected to pins 19,18
 byte reader2Pins[]={2,3};          // Reader2 connected to pins 2,3
@@ -28,76 +28,116 @@ long reader1 = 0;
 int  reader1Count = 0;
 long reader2 = 0;
 int  reader2Count = 0;
-const byte reader2buzz = 6;
-const byte reader2led = 4;
-bool access_granted = false;
-//Get the interrupt number of a given digital pin on an arduino mega.
-const byte pinToInterrupt[21] = {-1,-1,0,1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,5,4,3,2};
+const byte reader2buzz = 6; //pin for the buzzer on Reader2
+const byte reader2led = 4; //pin for led1 on Reader2
+const byte reader2led2 = 5; //pin for led2 on Reader2
+const byte reader1buzz = 7; //pin for the buzzer on Reader1
+const byte reader1led = 8; //pin for led1 on Reader1
+const byte reader1led2 = 17; //pin for led2 on Reader1
 WIEGAND26 wiegand26;
 
+
+
+//Get the interrupt number of a given digital pin on an arduino mega.
+const byte pinToInterrupt[21] = {-1,-1,0,1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,5,4,3,2};
+
+
+
+//pin-mappings
 const int relaysToPins[8] = {31,32,33,34,35,36,37,38};
 const int analogToPins[16] = {54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69};
-const int disallowedOutputs[28] = {0,1,2,3,9,14,15,16,18,19,20,21,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69}; //serial, i2c, rs485, wiegand data pins, analog inputs
-const int disallowedDigitalInputs[35] = {0,1,2,3,14,15,16,18,19,20,21,31,32,33,34,35,36,37,38,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69}; //serial, i2c, rs485, relays,wiegand data pins, analog inputs
+const int disallowedOutputs[34] = {0,1,2,3,4,5,6,7,8,9,14,15,16,17,18,19,20,21,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69}; //serial, i2c, rs485, wiegand pins, analog inputs
+const int disallowedDigitalInputs[41] = {0,1,2,3,4,5,6,7,8,14,15,16,17,18,19,20,21,31,32,33,34,35,36,37,38,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69}; //serial, i2c, rs485, relays,wiegand pins, analog inputs
 
-const int exit_button = 9;
-const int exit_relay = 0;
-const unsigned long exit_time = 5000;
-boolean exiting = 0;
-unsigned long exit_start_time = 0;
 
-const unsigned long RFID_time = 60000;
-unsigned long RFID_start_time = 0;
+//exit button stuff
+const int exit_button = 9; //digital pinthe exit button is attached to
+const int exit_relay = 0; //relay the door solenoid is on
+const unsigned long exit_time = 5000; //time to keep the door open in thousandths of a second
+boolean exiting = 0; //wether or not the door should be open (and timer running)
+unsigned long exit_start_time = 0; //used for count down timer
 
+
+//RFID timer stuff
+const unsigned long RFID_time = 60000; //timeout for the RFID scan in thousandths ofa second
+unsigned long RFID_start_time = 0; //used for the count down timer
+
+
+
+//dot matrix printer stuff
 const int dataPins[] = {41,42,43,44,45,46,47,48};
 const int strobePin = 39;//active low
 const int busyPin = 40;//active low
 
+
+
+//EEPROM stuff
+//if I have time I should figure out why it errors out reading over 512 entries
 int entry_size = 64;
 byte hash[32];
 char name[31];
 byte priv;
 byte command[64];
 
-boolean doorbell = 0;
-boolean can_doorbell = 0;
-unsigned long doorbell_start = 0;
-unsigned long doorbell_dur = (3600000*12);
+
+//doorbell mode stuff
+boolean doorbell = 0; //in doorbell mode?
+boolean can_doorbell = 0; //can a given user enter doorbell mode?
+unsigned long doorbell_start = 0; //used for count down timer
+unsigned long doorbell_dur = (3600000*12); //timeout for doorbell in hours
+
+//toggle stuff
+//unsigned long max_toggle = 15000; //maximum amount of time a toggle can sieze up the processor with a delay loop
+unsigned long toggle_dur[8] = {0,0,0,0,0,0,0,0}; //time in thousandths of a second
+unsigned long toggle_start[8] = {0,0,0,0,0,0,0,0}; //start time
+boolean toggled[8] = {0,0,0,0,0,0,0,0}; //active or not
 
 
-unsigned long max_toggle = 15000; //maximum amount of time a toggle can sieze up the processor with a delay loop
-unsigned long toggle_dur[8] = {0,0,0,0,0,0,0,0};
-unsigned long toggle_start[8] = {0,0,0,0,0,0,0,0};
-boolean toggled[8] = {0,0,0,0,0,0,0,0};
+//door hold mode stuff
+boolean doorhold = 0; //in door hold mode?
+boolean can_doorhold = 0; //can a given user enter door hold mode?
+unsigned long doorhold_start = 0; //used for count down timer
+unsigned long doorhold_dur = (60000*10); //timeout for door hold in minutes
 
 
-boolean doorhold = 0;
-boolean can_doorhold = 0;
-unsigned long doorhold_start = 0;
-unsigned long doorhold_dur = (60000*10);
+//battery stuff
+long voltage_threshold = 12.5; //threshold to throw an error at
+unsigned long battery_start = 0; //used for count down timer
+unsigned long battery_dur = (3600000); //time between battery checks (1 hour default)
 
-long voltage_threshold = 12.5;
-unsigned long battery_start = 0;
-unsigned long battery_dur = (3600000);
+//LCD stuff
+#include <LCD.h>
+#include <LiquidCrystal_SR3W.h>
+LiquidCrystal_SR3W iLCD(24,23,22);
 
-long tag = 0;
-boolean tag_read = 0;
+
+//keypad stuff
+int keypad_clock = 27;
+int keypad_input = 25;
+int keypad_reset = 26;
+char last = ' ';
+
+long tag = 0; //stores tag
+boolean tag_read = 0; //in pin readingmode
 byte pin[8] = {15,15,15,15,15,15,15,15}; //untypable character, unlike 0
-byte digit = 0;
-boolean new_tag_entry = 0;
-boolean can_add = 0;
-int num_users = 500;
+byte digit = 0; //index for pin[]
+boolean new_tag_entry = 0; //in new tag entry mode?
+boolean can_add = 0; //if a user ispermitted to add other users
+int num_users = 500; //number of users the EEPROM can take before it errors out (should debug this
 
 
 void setup()
 {  
-	SCC_1080_init();
+
 	Wire.begin();   // start Wire library as I2C-Bus Master
 	Serial.begin(9600); 
 	RFID_init();
 	IO_init();
 	printer_init();
-	battery_start = millis();
+	keypad_init();
+	battery_start = millis(); //start battery timer
+	iLCD.begin ( 16, 2 );
+	iLCD.clear();
 	// Setup callbacks for SerialCommand commands 
 	SCmd.addCommand("ON",relay_on);       // Turns relay on
 	//format: ON;<relay number(not pin number)>
@@ -110,7 +150,7 @@ void setup()
 	SCmd.addCommand("RTC",rtc_command);  // uses RTC
 	//format: RTC;<0=write, 1=read>;<second, 0-59 (write only)>;<minute,0-59 (write only)>;<hour, 1-23 (write only)>;<dayOfWeek, 1-7 (write only)>;<dayOfMonth, 1-28/29/30/31 (write only)>;<month, 1-12 (write only)>;<year, 0-99 (write only)>
 	SCmd.addCommand("DISP",display_command);  // uses display
-	//format: DISP;<0=all, 1=inside, 2=outside>;<0=left, 1=center, 2=right>;<string (or no argument to clear the display)>
+	//format: DISP;<0=line 1, 1=line 2 (or no argument to clear the display)>;<string (or no argument to clear the line)>
 	SCmd.addCommand("PRINT",print_command);  // uses printer
 	//format: PRINT;<string>
 	SCmd.addCommand("BAT",battery_command);  // reads battery voltage
@@ -134,9 +174,6 @@ void setup()
 	SCmd.addDefaultHandler(unrecognized);  // Handler for command that isn't matched  (says "What?") 
 
   
-	all.centerLinePrint("Welcome to i3Detroit");   
-	inside.centerLinePrint("Inside");
-	outside.centerLinePrint("Outside");
 	Serial.println("Ready"); 
 	//populate_blank_users();
 	//write_EE(0,"Evan", 15, "2dfcd8b17808e9bd50e47f2c94879111");
@@ -154,18 +191,19 @@ void setup()
 
 void loop()
 {
-	if (millis() - battery_start > battery_dur)
-	{
-		check_battery;
-	}
-  
-  
 	SCmd.readSerial();     //process serial commands
-	if (!digitalRead(exit_button)) //start exiting
+
+	if (!digitalRead(exit_button)) //exit button pressed
 	{
 		exit();
 	}
-	for(int i=0;i<8;i++)
+
+	if (millis() - battery_start > battery_dur) //battery timer loop
+	{
+		check_battery;
+	}
+
+	for(int i=0;i<8;i++) //toggle timer loops
 	{
 		if (toggled[i])
 		{
@@ -177,7 +215,8 @@ void loop()
 			}
 		}
 	}
-	if(doorbell == 1)
+
+	if(doorbell) //doorbell timer loop
 	{
   		//Serial.println(millis() - doorbell_start);
   		//Serial.println(doorbell_dur);
@@ -186,7 +225,7 @@ void loop()
 			doorbell = 0;
 		}
 	}
-	if(doorhold == 1)
+	if(doorhold) //door hold timer loop
 	{
   		//Serial.println(millis() - doorhold_start);
   		//Serial.println(doorhold_dur);
@@ -195,23 +234,24 @@ void loop()
 			doorhold = 0;
 		}
 	}
-
+	
 	if (tag_read)
 	{
 		//Serial.println(millis() - RFID_start_time);
-  		if (millis() - RFID_start_time > RFID_time) //RFID timeout
+  		if (millis() - RFID_start_time > RFID_time) //RFID time out loop
 		{
 			//Serial.println("done");
 			RFID_error_out();
 		}
 
-		if (reader2Count == 4) //reading a button in tag read mode
+		char keypad_button = keypad_matrix();
+		if (keypad_button != ' ') //reading a button in tag read mode
 		{
-			if(reader2 == 10) //escape
+			if(keypad_button == '*') //escape
 			{
 				backspace_pin();
 			}
-			else if(reader2 == 11)  //enter
+			else if(keypad_button == '#')  //enter
 			{
 				if (new_tag_entry ==1)
 				{
@@ -224,22 +264,22 @@ void loop()
 			}
 			else //other numbers
 			{
-				enter_pin();
+				enter_pin(keypad_button);
 			}
-			reader2Count = 0;
-			reader2 = 0; 
 		}
 	}
 	else
 	{
-		if (reader2Count == 4)  //just reading raw buttons, not in tag reading mode
+
+		char keypad_button = keypad_matrix();
+		if (keypad_button != ' ')  //just reading raw buttons, not in tag reading mode
 		{
   
-  			if(reader2 == 5 && exiting == 1 && can_add == 1)//button press for adding a user
+  			if(keypad_button == '5' && exiting == 1 && can_add == 1)//button press for adding a user
 			{
 				enter_new_tag_entry_mode();
 			}
-			if(reader2 == 2 && exiting == 1 && can_doorbell == 1)//button press for doorbell mode
+			if(keypad_button == '2' && exiting == 1 && can_doorbell == 1)//button press for doorbell mode
 			{
   				if(!doorbell)
   				{
@@ -250,7 +290,7 @@ void loop()
     					exit_doorbell_mode();
 				}
 			}
-			if(reader2 == 3 && exiting == 1 && can_doorhold == 1)//button press for door hold mode
+			if(keypad_button == '3' && exiting == 1 && can_doorhold == 1)//button press for door hold mode
 			{
   				if(!doorhold)
   				{
@@ -261,18 +301,16 @@ void loop()
     					exit_doorhold_mode();
 				}
 			}
-			if(reader2 == 11 && doorbell == 1)//button press in doorbell mode
+			if(keypad_button == '#' && doorbell == 1)//button press in doorbell mode
 			{
 				exit();
 			}
-			if(reader2 == 11 && doorhold == 1)//button press in door hold mode
+			if(keypad_button == '#' && doorhold == 1)//button press in door hold mode
 			{
 				exit();
 			}
 			Serial.print("Button = ");
-			Serial.println(reader2);
-			reader2Count = 0;
-			reader2 = 0;
+			Serial.println(keypad_button);
 		}
 	}
 
@@ -281,20 +319,15 @@ void loop()
 		Serial.println("overflow");
 		RFID_error_out();
 	}
-	if (exiting)
+
+	if (exiting) 
 	{
-		if (millis() - exit_start_time > exit_time) //stop exiting (shut door relay off)
+		if (millis() - exit_start_time > exit_time) //exit time out loop
 		{
-			Serial.println("exit timed out");
-			exiting = 0;
-			can_add = 0;
-			can_doorhold = 0;
-			can_doorbell = 0;
-			//exit_start_time = 0; //not needed
-			digitalWrite(relaysToPins[exit_relay], LOW);
+			exit_timeout();
 		}
 	}
-	if (reader2Count >= 26) //read tag for new input, start tag reading mode (accepting buttons as pin)
+	if (reader2Count >= 26) //read tag for new input, start tag reading mode (accepting buttons as pin)////////////////////////////set up for reader1
 	{
 		Serial.println("tag read");
 		reset_tag_reading();
@@ -302,6 +335,85 @@ void loop()
 	delay(100);
 }
 
+char keypad_matrix()
+{
+	keypad_rst();
+	byte data_in = shiftIn(keypad_input,keypad_clock,LSBFIRST);
+	char result = ' ';
+	switch (data_in)
+	{
+		case 0x08:
+			result = '1';
+			break;
+		case 0x10:
+			result = '2';
+			break;
+		case 0x20:
+			result = '3';
+			break;
+		case 0x09:
+			result = '4';
+			break;
+		case 0x11:
+			result = '5';
+			break;
+		case 0x21:
+			result = '6';
+			break;
+		case 0x0a:
+			result = '7';
+			break;
+		case 0x12:
+			result = '8';
+			break;
+		case 0x22:
+			result = '9';
+			break;
+		case 0x0c:
+			result = '*';
+			break;
+		case 0x14:
+			result = '0';
+			break;
+		case 0x24:
+			result = '#';
+			break;
+	}
+	if(result != last)
+	{
+		//if(result != ' ')
+		//{
+		//	Serial.print(result);
+		//	iLCD.send(result,DATA);
+		//	//iLCD.setCursor ( 0, 1 );
+		//}
+		last = result;
+		return result;
+	}
+	delay(10);
+}
+
+
+
+
+
+void keypad_rst()
+{
+	digitalWrite(keypad_reset,0);
+	delay(1);
+	digitalWrite(keypad_reset,1);
+}
+
+void exit_timeout()
+{
+	Serial.println("exit timed out");
+	exiting = 0; //no longer in exiting mode
+	can_add = 0; //reset user capabilities
+	can_doorhold = 0; //reset user capabilities
+	can_doorbell = 0; //reset user capabilities
+	//exit_start_time = 0; //not needed
+	digitalWrite(relaysToPins[exit_relay], LOW); //close door
+}
 
 void check_battery()
 {
@@ -309,10 +421,11 @@ void check_battery()
 	float voltage = (((float)analogRead(A15)*20.0)/1024.0);
 	if(voltage<voltage_threshold)
 	{
-		//battery voltage dropped low
+		//battery voltage dropped low (alarm?)
 	}
 	log_battery();
 }
+
 char *ftoa(char *a, double f, int precision)
 {
   long p[] = {0,10,100,1000,10000,100000,1000000,10000000,100000000};
@@ -326,12 +439,13 @@ char *ftoa(char *a, double f, int precision)
   itoa(desimal, a, 10);
   return ret;
 }
+
 void log_battery()
 {
 	float voltage = (((float)analogRead(A15)*20.0)/1024.0);
 	char volt[8];
 	ftoa(volt,voltage,2);
-	//dtostrf(voltage,8,2,volt);
+	//dtostrf(voltage,8,2,volt); should work?
   	String printout;
 	printout += "Battery voltage: ";
 	printout += volt;
@@ -339,8 +453,8 @@ void log_battery()
 	printout += logDate();
 	Serial.println(printout);
 	//parallel printout
-	//display output
 }
+
 void exit_doorbell_mode()
 {
 	Serial.println("exit doorbell mode");
@@ -400,6 +514,7 @@ void new_user_entry()
 	{
   		clear_pin();
 		int d = 300;
+		//display "pin too short"
 		beep_reader2(d);
 		delay(d);
 		beep_reader2(d);
@@ -477,14 +592,14 @@ void current_user_entry()
 	{
 		RFID_error_out();
 	}
-	Serial.println(md5str);
+	//Serial.println(md5str);
 	//Serial.println();
 	//Serial.println(test);
-	for(int i=0;i<(sizeof(hashed)/sizeof(hashed[0]));i++)
+	for(int i=0;i<(sizeof(hashed)/sizeof(hashed[0]));i++)//should not be needed
 	{
 		hashed[i] = 0;   
 	}
-	toHash = "";
+	toHash = ""; //also not needed?
 	RFID_reset();
 }
 
@@ -505,19 +620,19 @@ void backspace_pin()
 	//}
 }
 
-void enter_pin()
+void enter_pin(char c)
 {
-	Serial.print("Pin Button = ");
-	Serial.println(reader2);
-	pin[digit] = reader2;
+	//Serial.print("Pin Button = ");
+	//Serial.println(reader2);
+	pin[digit] = c - '0';
 	digit++;
 }
 
-void reset_tag_reading()
+void reset_tag_reading()/////////////////////////////////////////////////////////////////////////////////////////////////////////////add in reader1
 {
 	tag = reader2;
-	Serial.print("Read Tag = ");
-	Serial.println(tag,HEX);
+	//Serial.print("Read Tag = ");
+	//Serial.println(tag,HEX);
 	reader2Count = 0;
 	reader2 = 0;
 	tag_read = 1;
@@ -528,7 +643,8 @@ void reset_tag_reading()
 void write_EE(int index, String name, byte priv, String hash)
 {
 	index +=1;
-	char data[64] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+	char data[64] = {};
+//{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
 	//char data[64];
 	for(int i = 0;i<31;i++)
 	{
@@ -557,7 +673,7 @@ void write_EE(int index, String name, byte priv, String hash)
 	int start_address = (index) * entry_size;
 	int end_address = start_address + entry_size;
   
-	Serial.println("Writing data");
+	//Serial.println("Writing data");
 	for (int address = start_address; address < end_address; address++)
 	{
 		EEPROM1024.write(address, data[address % entry_size]);
@@ -737,8 +853,8 @@ void dump_EE(int start_address, int end_address)
 		Serial.print(address);
 		Serial.print(" :");
 		Serial.print(data, HEX);
-		//Serial.print(" :");
-		//Serial.println(data);
+		Serial.print(" :");
+		Serial.println(data);
 	}
 	//Serial.println("DONE");
 return;
@@ -760,6 +876,7 @@ void read_EE_hash(int index)
 	}
 	return;
 }
+
 void read_EE_priv(int index)
 {
 	priv = EEPROM1024.read(((index+1) * entry_size) + 31);
@@ -814,6 +931,20 @@ void balnk_EE_cmd()
 boolean user_present(int i)
 {
 	read_EE_priv(i);
+	if(priv != 0)
+	{
+		return 1;
+	}
+	else
+	{
+		return 0;
+	}
+}
+
+
+boolean can_enter(int i)
+{
+	read_EE_priv(i);
 	if(priv == 1||priv == 3||priv == 5||priv == 7||priv == 9||priv == 11||priv == 13||priv == 15)
 	{
 		return 1;
@@ -825,15 +956,38 @@ boolean user_present(int i)
 }
 
 
-
 boolean authenticate(char *md5str)
 {//////////////////////////////////////////////////////////////////////////////////////////////////hardcode hashes
+
+	byte hard_hash[5][32] = {{},{},{},{},{}};/////////5 hashes
+	boolean succeed = 1;
+	for (int k=0;k<5;k++)
+	{
+		for (int j=0;j<32;j++)
+		{
+			if(hard_hash[k][j] != (md5str[j]))
+			{
+				//Serial.print("fail: ");
+				//Serial.println(i,DEC);
+				//Serial.println(j,DEC);
+				//Serial.println(hash[j],HEX);
+				//Serial.println((md5str[j]),HEX);
+				succeed = 0;
+				j+=32;
+			}
+		}
+	}
+	if(succeed)
+	{
+		Serial.print("Failsafe used");
+		return 1;
+	}
 	for (int i=0;i<num_users;i++)
 	{
-		if(user_present(i))
+		if(can_enter(i))
 		{
 			read_EE_hash(i);
-			boolean succeed = 1;
+			succeed = 1;
 			for (int j=0;j<32;j++)
 			{
 				if(hash[j] != (md5str[j]))
@@ -892,6 +1046,15 @@ void RFID_error_out()
 	beep_reader2(d);
 }
 
+void keypad_init()
+{
+	pinMode (keypad_clock, OUTPUT);
+	pinMode (keypad_input, INPUT);
+	pinMode (keypad_reset, OUTPUT);
+	digitalWrite(keypad_clock,0);
+	keypad_rst();
+}
+
 void IO_init()
 {
 	for (int i=0;i<sizeof(relaysToPins)/sizeof(relaysToPins[0]);i++)
@@ -917,20 +1080,24 @@ void RFID_init()
 {
 	pinMode(reader2buzz, OUTPUT);
 	pinMode(reader2led, OUTPUT);
+	pinMode(reader2led2, OUTPUT);
 	digitalWrite(reader2led, 1); //active low
 	digitalWrite(reader2buzz, 1); //active low
 	attachInterrupt(pinToInterrupt[reader2Pins[1]], callReader2One,  CHANGE);
 	attachInterrupt(pinToInterrupt[reader2Pins[0]], callReader2Zero, CHANGE);
 	wiegand26.initReaderTwo();
+
+
+	pinMode(reader1buzz, OUTPUT);
+	pinMode(reader1led, OUTPUT);
+	pinMode(reader1led2, OUTPUT);
+	digitalWrite(reader1led, 1); //active low
+	digitalWrite(reader1buzz, 1); //active low
+	attachInterrupt(pinToInterrupt[reader1Pins[1]], callReader1One,  CHANGE);
+	attachInterrupt(pinToInterrupt[reader1Pins[0]], callReader1Zero, CHANGE);
+	wiegand26.initReaderOne();
 }
 
-void SCC_1080_init()
-{
-	SCC_1080::rs485init(*mySerial,9600,16);
-	SCC_1080::rs485tx(16);
-	all.kbDisable();
-	all.vfdClear();
-}
 
 void EE_read_CMD_command()
 {
@@ -949,6 +1116,15 @@ void beep_reader2(int d)
 	delay(d);
 	digitalWrite(reader2led, 1);
 	digitalWrite(reader2buzz, 1);
+}
+
+void beep_reader1(int d)
+{
+	digitalWrite(reader1led, 0);
+	digitalWrite(reader1buzz, 0);
+	delay(d);
+	digitalWrite(reader1led, 1);
+	digitalWrite(reader1buzz, 1);
 }
 
 void clear_pin() //not needed since I use an extrenal index, I think
@@ -1010,14 +1186,7 @@ void toggle_command()
 	arg = SCmd.next(); 
 	if (arg != NULL) 
 	{
-		if (atoi(arg) < max_toggle)
-		{
-			dur=atoi(arg); 
-		}
-		else
-		{
-			dur=1000;
-		}
+		dur=atoi(arg); 
 		//Serial.print("Duration: "); 
 		//Serial.println(dur); 
 		digitalWrite(relaysToPins[relay], HIGH);
@@ -1206,38 +1375,13 @@ void display_command()
 			arg = SCmd.next();
 			if (arg != NULL) 
 			{
-				if (atoi(arg) == 0) 
-				{
-					arg = SCmd.next();
-					if (arg != NULL) 
-					{
-						all.leftLinePrint(arg); 
-					}
-				}
-				else if (atoi(arg) == 1) 
-				{
-					arg = SCmd.next();
-					if (arg != NULL) 
-					{
-						all.centerLinePrint(arg);
-					} 
-				}
-				else if (atoi(arg) == 2) 
-				{
-					arg = SCmd.next();
-					if (arg != NULL) 
-					{
-						all.rightLinePrint(arg); 
-					}
-				}
-				else
-				{
-					//Serial.println("invalid entry");
-				}
+				iLCD.setCursor(0,0);
+				iLCD.print(arg);
 			} 
 			else
 			{
-				all.vfdClear();
+				iLCD.setCursor(0,0);
+				iLCD.print("                ");
 			}
 		}
 		else if (atoi(arg) == 1)
@@ -1246,84 +1390,19 @@ void display_command()
 			arg = SCmd.next();
 			if (arg != NULL) 
 			{
-				if (atoi(arg) == 0) 
-				{
-					arg = SCmd.next();
-					if (arg != NULL) 
-					{
-						inside.leftLinePrint(arg); 
-					}
-				}
-				else if (atoi(arg) == 1) 
-				{
-					arg = SCmd.next();
-					if (arg != NULL) 
-					{
-						inside.centerLinePrint(arg); 
-					}
-				}
-				else if (atoi(arg) == 2) 
-				{
-					arg = SCmd.next();
-					if (arg != NULL) 
-					{
-						inside.rightLinePrint(arg); 
-					}
-				}
-				else
-				{
-					//Serial.println("invalid entry");
-				}
+				iLCD.setCursor(0,1);
+				iLCD.print(arg);
 			} 
 			else
 			{
-				inside.vfdClear();
-			}
-		}
-		else if (atoi(arg) == 2)
-		{
-			//Serial.println("outside");
-			arg = SCmd.next();
-			if (arg != NULL) 
-			{
-				if (atoi(arg) == 0) 
-				{
-					arg = SCmd.next();
-					if (arg != NULL) 
-					{
-						outside.leftLinePrint(arg); 
-					}
-				}
-				else if (atoi(arg) == 1) 
-				{
-					arg = SCmd.next();
-					if (arg != NULL) 
-					{
-						outside.centerLinePrint(arg); 
-					}
-				}
-				else if (atoi(arg) == 2) 
-				{
-					arg = SCmd.next();
-					if (arg != NULL) 
-					{
-						outside.rightLinePrint(arg); 
-					}
-				}
-				else
-				{
-					//Serial.println("invalid entry");
-				}
-			} 
-			else
-			{
-				outside.vfdClear();
+				iLCD.setCursor(0,1);
+				iLCD.print("                ");
 			}
 		}
 	}  
 	else 
 	{
-		//Serial.println("No arguments"); 
+		iLCD.clear();
 	}
 }
 

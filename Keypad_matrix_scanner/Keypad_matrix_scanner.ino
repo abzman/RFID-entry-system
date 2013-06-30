@@ -12,26 +12,38 @@
 
 #include <Arduino.h>
 
-int clock = 49;
-int input = 50;
+int clock = 27;
+int input = 25;
+int reset = 26;
 
+#include <Wire.h>
+#include <LCD.h>
+#include <LiquidCrystal_SR3W.h>
+
+// initialize the library with the numbers of the interface pins
+LiquidCrystal_SR3W iLCD(24,23,22);
+
+char last = ' ';
 void setup() {
   Serial.begin(9600);
   
+   iLCD.begin ( 16, 2 );
   pinMode (clock, OUTPUT);
   pinMode (input, INPUT);
+  pinMode (reset, OUTPUT);
   digitalWrite(clock,0);
+  rst();
   delay(10);
+  iLCD.clear();
+  
+                    Serial.println("test");
 }
 
 void loop() 
 {
-  
+  rst();
   byte data_in = shiftIn(input,clock,LSBFIRST);
-  
-  clk();
-  clk();
-  char result = ' '; // need to define something ...
+  char result = ' ';
                     switch (data_in)
                     {
 
@@ -72,13 +84,24 @@ void loop()
                             result = '#';
                             break;
                     }
-                    //Serial.println(data_in,HEX);
-                    Serial.println(result);
+                    
+                  if(result != last)
+                  //Serial.println(data_in,HEX);
+                  {
+                    if(result != ' ')
+                    {
+                      
+                  Serial.print(result);
+                      iLCD.send(result,DATA);
+                      //iLCD.setCursor ( 0, 1 );
+                    }
+                    last = result;
+                  }
                 delay(10);
 }
-void clk()
+void rst()
 {
-    digitalWrite(clock,1);
+    digitalWrite(reset,0);
   delay(1);
-  digitalWrite(clock,0);
+  digitalWrite(reset,1);
 }
