@@ -11,6 +11,9 @@
 #include <SerialCommand.h>
 SerialCommand SCmd;   // The demo SerialCommand object
 
+#include <OneWire.h>
+/* Interface to DS1822 chip, record data to eeprom */
+OneWire ds(30);  /* define the pin the interface is on */
 
 //I2C stuff
 #include <Wire.h>         // Needed for I2C Connection to the DS1307 date/time chip
@@ -39,7 +42,7 @@ WIEGAND26 wiegand26;
 
 
 //Get the interrupt number of a given digital pin on an arduino mega.
-const byte pinToInterrupt[21] = {-1,-1,0,1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,5,4,3,2};
+const byte pinToInterrupt[22] = {-1,-1,0,1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,5,4,3,2};
 
 
 
@@ -51,23 +54,23 @@ const int disallowedDigitalInputs[41] = {0,1,2,3,4,5,6,7,8,14,15,16,17,18,19,20,
 
 
 //exit button stuff
-const int exit_button = 9; //digital pinthe exit button is attached to
+const int exit_button = 48; //digital pinthe exit button is attached to
 const int exit_relay = 0; //relay the door solenoid is on
-const unsigned long exit_time = 5000; //time to keep the door open in thousandths of a second
+const unsigned long exit_time = 3000; //time to keep the door open in thousandths of a second
 boolean exiting = 0; //wether or not the door should be open (and timer running)
 unsigned long exit_start_time = 0; //used for count down timer
 
 
 //RFID timer stuff
-const unsigned long RFID_time = 60000; //timeout for the RFID scan in thousandths ofa second
+const unsigned long RFID_time = 30000; //timeout for the RFID scan in thousandths of a second
 unsigned long RFID_start_time = 0; //used for the count down timer
 
 
 
 //dot matrix printer stuff
-const int dataPins[] = {41,42,43,44,45,46,47,48};
+const int dataPins[] = {41,40,43,42,45,44,47,46};
 const int strobePin = 39;//active low
-const int busyPin = 40;//active low
+const int busyPin = 49;//active low
 
 
 
@@ -77,7 +80,7 @@ int entry_size = 64;
 byte hash[32];
 char name[31];
 byte priv;
-byte command[64];
+byte command[64]; //add time zone
 
 
 //doorbell mode stuff
@@ -106,15 +109,12 @@ unsigned long battery_start = 0; //used for count down timer
 unsigned long battery_dur = (3600000); //time between battery checks (1 hour default)
 
 //LCD stuff
-#include <LCD.h>
-#include <LiquidCrystal_SR3W.h>
-LiquidCrystal_SR3W iLCD(24,23,22);
-
+#include <I2CLCD.h>
+int contrast = 9;
+int cont_value = 85;
+I2CLCD lcd = I2CLCD(0x12, 16, 2); //set for 16X2 LCD
 
 //keypad stuff
-int keypad_clock = 27;
-int keypad_input = 25;
-int keypad_reset = 26;
 char last = ' ';
 
 long tag = 0; //stores tag
@@ -136,8 +136,7 @@ void setup()
 	printer_init();
 	keypad_init();
 	battery_start = millis(); //start battery timer
-	iLCD.begin ( 16, 2 );
-	iLCD.clear();
+	LCD_init();
 	// Setup callbacks for SerialCommand commands 
 	SCmd.addCommand("ON",relay_on);       // Turns relay on
 	//format: ON;<relay number(not pin number)>
@@ -155,8 +154,10 @@ void setup()
 	//format: PRINT;<string>
 	SCmd.addCommand("BAT",battery_command);  // reads battery voltage
 	//format: BAT
-	SCmd.addCommand("BEEP",beep_command);  // beeps reader2 for <duration> in delay(arg) format
-	//format: BEEP
+	SCmd.addCommand("TEMP",temp_command);  // reads battery voltage
+	//format: TEMP
+	SCmd.addCommand("BEEP",beep_command);  // beeps reader<reader number> for <duration> in delay(arg) format
+	//format: BEEP;<reader number>,<duration>
 	SCmd.addCommand("EE_READ_CMD",EE_read_CMD_command);  // dumps the command area of the eeprom
 	//format: EE_READ_CMD
 	SCmd.addCommand("EE_DUMP_USR",EE_dump_users);  // dumps all users up to index
@@ -173,10 +174,12 @@ void setup()
 	//format: EE_RMV_USRH;<hash>
 	SCmd.addDefaultHandler(unrecognized);  // Handler for command that isn't matched  (says "What?") 
 
-  
-	Serial.println("Ready"); 
+	logging(logDate());
+	logging(" - ");
+	loggingln("Rebooted"); 
+	LCD_default();
 	//populate_blank_users();
-	//write_EE(0,"Evan", 15, "2dfcd8b17808e9bd50e47f2c94879111");
+	//write_EE(0,"Evan", 15, "9a7eaa8c16bd8073d32991d7ddc8a480");
 	//write_EE(1,"Charlie", 4, "dacbac186709549ff6f16b6a7df0dd1c");
 	//write_EE(2,"Mike", 7, "22df7bee944f0b02bc0b9ce8b826e862");
 	//write_EE(3,"Whoever", 1, "d2e8102a9b4d8bcd20d38cb1fa2b0ddc");
@@ -192,7 +195,8 @@ void setup()
 void loop()
 {
 	SCmd.readSerial();     //process serial commands
-
+	//Serial.println(relaysToPins[exit_relay]);
+	//digitalWrite(31,1);
 	if (!digitalRead(exit_button)) //exit button pressed
 	{
 		exit();
@@ -241,6 +245,8 @@ void loop()
   		if (millis() - RFID_start_time > RFID_time) //RFID time out loop
 		{
 			//Serial.println("done");
+			LCD_clear();
+			LCD_displn("RFID timeout",0);
 			RFID_error_out();
 		}
 
@@ -304,19 +310,26 @@ void loop()
 			if(keypad_button == '#' && doorbell == 1)//button press in doorbell mode
 			{
 				exit();
+				beep_reader(2,300);
 			}
 			if(keypad_button == '#' && doorhold == 1)//button press in door hold mode
 			{
 				exit();
+				beep_reader(2,300);
 			}
-			Serial.print("Button = ");
-			Serial.println(keypad_button);
+			//Serial.print("Button = ");
+			//Serial.println(keypad_button);
 		}
 	}
 
 	if(digit == (sizeof(pin)/sizeof(pin[0]))+1) //too big pin
 	{
-		Serial.println("overflow");
+		logging(logDate());
+		logging(" - ");
+		loggingln("pin overflow");
+		LCD_clear();
+		LCD_displn("Error:",0);
+		LCD_displn("pin too big",1);
 		RFID_error_out();
 	}
 
@@ -327,90 +340,138 @@ void loop()
 			exit_timeout();
 		}
 	}
-	if (reader2Count >= 26) //read tag for new input, start tag reading mode (accepting buttons as pin)////////////////////////////set up for reader1
+	if (reader2Count >= 26) //read tag for new input, start tag reading mode (accepting buttons as pin)
 	{
-		Serial.println("tag read");
-		reset_tag_reading();
+		reset_tag_reading(2);
 	}
-	delay(100);
+	if (reader1Count >= 26) //read tag for new input, start tag reading mode (accepting buttons as pin)
+	{
+		reset_tag_reading(1);
+	}
+	//delay(100);
+}
+
+void temp_command()
+{
+	char temp[8];
+	ftoa(temp,getTemp(),2);
+	//dtostrf(voltage,8,2,volt); should work?
+  	String printout;
+	printout += "Temperature outside: ";
+	printout += temp;
+
+	logging(logDate());
+	logging(" - ");
+	loggingln(printout);
+}
+
+
+float getTemp()
+{
+	byte data[9];
+	byte addr[8];
+	int temp;
+  
+	while ( !ds.search(addr)) 
+	{
+		//Serial.print("No more addresses.\n");
+		ds.reset_search();
+	}
+	ds.reset();
+	ds.select(addr);
+	ds.write(0x44,1);
+	delay(600);
+	byte present = ds.reset();
+	ds.select(addr);    
+	ds.write(0xBE);
+	for (byte i = 0; i < 9; i++) 
+	{
+		data[i] = ds.read();
+	}
+	boolean negative = (data[1] & 1<<5);
+	data[1] <<=4;
+	data[1] >>=4;
+	temp = data[1];
+	temp <<= 8;             /* shift left eight bits */
+	temp += data[0];        /* add second byte of temperature */
+	float tempFloat = (float)temp/16.0;
+	if(negative)
+	{
+		tempFloat = -tempFloat;
+	}
+	return tempFloat;
+}
+
+
+void LCD_init()
+{
+	analogWrite(contrast,cont_value);
+	lcd.init();
+	lcd.backlight(1);
+	lcd.blinkOff();      // turn blinking cursor off
+	lcd.clearBuffer();
+	lcd.clear();
+	//LCD_clear();
 }
 
 char keypad_matrix()
 {
-	keypad_rst();
-	byte data_in = shiftIn(keypad_input,keypad_clock,LSBFIRST);
-	char result = ' ';
-	switch (data_in)
-	{
-		case 0x08:
-			result = '1';
-			break;
-		case 0x10:
-			result = '2';
-			break;
-		case 0x20:
-			result = '3';
-			break;
-		case 0x09:
-			result = '4';
-			break;
-		case 0x11:
-			result = '5';
-			break;
-		case 0x21:
-			result = '6';
-			break;
-		case 0x0a:
-			result = '7';
-			break;
-		case 0x12:
-			result = '8';
-			break;
-		case 0x22:
-			result = '9';
-			break;
-		case 0x0c:
-			result = '*';
-			break;
-		case 0x14:
-			result = '0';
-			break;
-		case 0x24:
-			result = '#';
-			break;
-	}
-	if(result != last)
-	{
-		//if(result != ' ')
-		//{
-		//	Serial.print(result);
-		//	iLCD.send(result,DATA);
-		//	//iLCD.setCursor ( 0, 1 );
-		//}
+	char result = lcd.getKey(); //Read key press
+	if (result != last) 
+	{      //check buffer
+		if (result != 0x00)  
+		{  //ignore get key return of 0x00
+			return result;
+		}
+ 
 		last = result;
-		return result;
+ 
+	} // main test - if(a = !=b)
+	else
+	{
+		return ' ';
 	}
-	delay(10);
+	//delay(10);
+}
+
+void LCD_default()
+{
+	//LCD_init();
+	LCD_clear();
+	if(doorbell)
+	{
+		LCD_displn("Welcome: press",0);
+		LCD_displn("\"#\" to enter",1);
+	}
+	else if(doorhold)
+	{
+		LCD_displn("Door held: press",0);
+		LCD_displn("\"#\" to enter",1);
+	}
+	else
+	{
+		LCD_displn("i3 Detroit",0);
+		LCD_displn("Hackerspace",1);
+	}
 }
 
 
-
-
-
+/*
 void keypad_rst()
 {
 	digitalWrite(keypad_reset,0);
 	delay(1);
 	digitalWrite(keypad_reset,1);
 }
-
+*/
 void exit_timeout()
 {
-	Serial.println("exit timed out");
+	logging(logDate());
+	logging(" - ");
+	loggingln("exit relay closed");
+	LCD_default();
+	RFID_reset();
 	exiting = 0; //no longer in exiting mode
-	can_add = 0; //reset user capabilities
-	can_doorhold = 0; //reset user capabilities
-	can_doorbell = 0; //reset user capabilities
 	//exit_start_time = 0; //not needed
 	digitalWrite(relaysToPins[exit_relay], LOW); //close door
 }
@@ -449,22 +510,32 @@ void log_battery()
   	String printout;
 	printout += "Battery voltage: ";
 	printout += volt;
-	printout += " Time: ";
-	printout += logDate();
-	Serial.println(printout);
-	//parallel printout
+
+	logging(logDate());
+	logging(" - ");
+	loggingln(printout);
 }
 
 void exit_doorbell_mode()
 {
-	Serial.println("exit doorbell mode");
+	logging(logDate());
+	logging(" - ");
+	loggingln("exit doorbell mode");
+	LCD_clear();
+	LCD_displn("doorbell mode",0);
+	LCD_displn("deactivated",1);
 	doorbell = 0;
 	doorbell_start = 0;
 	can_doorbell = 0;
 }
 void enter_doorbell_mode()
 {
-	Serial.println("doorbell mode");
+	logging(logDate());
+	logging(" - ");
+	loggingln("enter doorbell mode");
+	LCD_clear();
+	LCD_displn("doorbell mode",0);
+	LCD_displn("activated",1);
 	doorbell =1;
 	doorbell_start = millis();
 	can_doorbell = 0;
@@ -472,21 +543,36 @@ void enter_doorbell_mode()
 
 void exit_doorhold_mode()
 {
-	Serial.println("exit door hold mode");
+	logging(logDate());
+	logging(" - ");
+	loggingln("exit door hold mode");
+	LCD_clear();
+	LCD_displn("door hold mode",0);
+	LCD_displn("deactivated",1);
 	doorhold = 0;
 	doorhold_start = 0;
 	can_doorhold = 0;
 }
 void enter_doorhold_mode()
 {
-	Serial.println("door hold mode");
+	logging(logDate());
+	logging(" - ");
+	loggingln("enter door hold mode");
+	LCD_clear();
+	LCD_displn("door hold mode",0);
+	LCD_displn("activated",1);
 	doorhold =1;
 	doorhold_start = millis();
 	can_doorhold = 0;
 }
 void enter_new_tag_entry_mode()
 {
-	Serial.println("new tag");
+	logging(logDate());
+	logging(" - ");
+	loggingln("new member attempt");
+	LCD_clear();
+	LCD_displn("New member:",0);
+	LCD_displn("swipe new tag",1);
 	exiting = 0;
 	can_add = 0;
 	digitalWrite(relaysToPins[exit_relay], LOW);
@@ -495,7 +581,9 @@ void enter_new_tag_entry_mode()
 
 void exit()
 {
-	Serial.println("exiting");
+	logging(logDate());
+	logging(" - ");
+	loggingln("exit relay open");
 	exiting = 1;
 	exit_start_time = millis();
 	digitalWrite(relaysToPins[exit_relay], HIGH);
@@ -514,10 +602,11 @@ void new_user_entry()
 	{
   		clear_pin();
 		int d = 300;
-		//display "pin too short"
-		beep_reader2(d);
-		delay(d);
-		beep_reader2(d);
+		LCD_clear();
+		LCD_displn("pin too short",0);
+		beep_repeat(2,200,2);
+		reader2 = tag;//hack
+		reset_tag_reading(2);//hack
 		RFID_start_time = millis();
 	}
 	else
@@ -546,7 +635,7 @@ void new_user_entry()
 		{
 			if(!user_present(i))
 			{
-  				String name = "New User ";
+  				String name = "New Member ";
 				name += logDate();
 				priv= 1;
 				write_EE(i, name, priv, md5str);
@@ -554,7 +643,15 @@ void new_user_entry()
 			}
 		}
 		//Serial.println(md5str);
-		Serial.println("added!");
+		logging(logDate());
+		logging(" - ");
+		logging("new user ");
+		logging(md5str);
+		logging(" added");
+		LCD_clear();
+		LCD_displn("Welcome",0);
+		LCD_displn("New member",1);
+
 		for(int i=0;i<(sizeof(hashed)/sizeof(hashed[0]));i++) //also should not be needed
 		{
 			hashed[i] = 0;   
@@ -586,10 +683,33 @@ void current_user_entry()
 	char *md5str = MD5::make_digest(MD5::make_hash(hashed), 16);
 	if(authenticate(md5str) == 1)
 	{
+		logging(logDate());
+		logging(" - ");
+		String printname = "";
+		for (int j = 0; j < (sizeof(name)/sizeof(name[0])); j++)
+		{
+			if(name[j] != 0)
+			{
+				printname += name[j];
+				//Serial.println(name[j],HEX);
+ 			}
+		}
+		logging(printname);
+		loggingln(" carded in");
+		LCD_clear();
+		LCD_displn("Welcome Member:",0);
+		LCD_displn(printname,1);
 		exit();
 	}
 	else
 	{
+		logging(logDate());
+		logging(" - ");
+		//logging(md5str);//
+		//logging(" - ");//
+		loggingln("card entry failed");
+		LCD_clear();
+		LCD_displn("Invalid entry",0);
 		RFID_error_out();
 	}
 	//Serial.println(md5str);
@@ -609,10 +729,16 @@ void backspace_pin()
 {
 	pin[digit] = 15;
 	//Serial.println("backspace");
+	LCD_displn("                ",1);
+	LCD_displn("Pin:",1);
 	if(digit >0)
 	{
 		digit--;
 		pin[digit] = 15;
+	}
+	for (int i = 0;i<digit;i++)
+	{
+		LCD_disp("*");
 	}
 	//for(int i=0;i<(sizeof(pin)/sizeof(pin[0]));i++)
 	//{
@@ -624,17 +750,38 @@ void enter_pin(char c)
 {
 	//Serial.print("Pin Button = ");
 	//Serial.println(reader2);
+		LCD_disp("*");
 	pin[digit] = c - '0';
 	digit++;
 }
 
-void reset_tag_reading()/////////////////////////////////////////////////////////////////////////////////////////////////////////////add in reader1
+void reset_tag_reading(int reader_num)
 {
-	tag = reader2;
-	//Serial.print("Read Tag = ");
-	//Serial.println(tag,HEX);
-	reader2Count = 0;
-	reader2 = 0;
+	//Serial.print("tag reader ");
+	//Serial.println(reader_num,HEX);
+	String newtag ="";
+	if(reader_num == 1)
+	{
+		reader1 = reader1 >> 1;
+		tag = reader1;
+		reader1Count = 0;
+		reader1 = 0;
+	}
+	else if(reader_num == 2)
+	{
+		reader2 = reader2 >> 1;
+		tag = reader2;
+		reader2Count = 0;
+		reader2 = 0;	
+	}
+	newtag+=tag;
+	logging(logDate());
+	logging(" - ");
+	logging(newtag);
+	loggingln(" tag read");
+	LCD_clear();
+	LCD_displn("Please Enter",0);
+	LCD_displn("Pin:",1);
 	tag_read = 1;
 	clear_pin();
 	RFID_start_time = millis();
@@ -834,7 +981,7 @@ void serial_user_print(int index)
 			Serial.print(name[j]);
 	}
 	Serial.print(";");
-	Serial.print((char)(priv+48));
+	Serial.print(priv,HEX);
 	Serial.print(";");
 	for  (int j = 0; j < (sizeof(hash)/sizeof(hash[0])); j++)
 	{
@@ -957,9 +1104,9 @@ boolean can_enter(int i)
 
 
 boolean authenticate(char *md5str)
-{//////////////////////////////////////////////////////////////////////////////////////////////////hardcode hashes
+{/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////hardcode hashes
 
-	byte hard_hash[5][32] = {{},{},{},{},{}};/////////5 hashes
+	byte hard_hash[5][33] = {{/*"e0bdc8c7b2e2d33e7889858a30aad569"*/},{},{},{},{}};/////////5 hashes
 	boolean succeed = 1;
 	for (int k=0;k<5;k++)
 	{
@@ -968,7 +1115,7 @@ boolean authenticate(char *md5str)
 			if(hard_hash[k][j] != (md5str[j]))
 			{
 				//Serial.print("fail: ");
-				//Serial.println(i,DEC);
+				//Serial.println(k,DEC);
 				//Serial.println(j,DEC);
 				//Serial.println(hash[j],HEX);
 				//Serial.println((md5str[j]),HEX);
@@ -976,12 +1123,27 @@ boolean authenticate(char *md5str)
 				j+=32;
 			}
 		}
-	}
 	if(succeed)
 	{
-		Serial.print("Failsafe used");
+  		String printname = "Failsafe";
+		for (int j = 0; j < printname.length(); j++)///////////////////////////////////////////////////////////////////////untested
+		{
+			if(printname[j] != 0)
+			{
+				name[j] = printname[j];
+				//Serial.println(name[j],HEX);
+ 			}
+		}
+  
+  
+  
+		logging(logDate());
+		logging(" - ");
+		loggingln("Failsafe used");
 		return 1;
 	}
+	}
+
 	for (int i=0;i<num_users;i++)
 	{
 		if(can_enter(i))
@@ -992,8 +1154,8 @@ boolean authenticate(char *md5str)
 			{
 				if(hash[j] != (md5str[j]))
 				{
-					Serial.print("fail: ");
-					Serial.println(i,DEC);
+					//Serial.print("fail: ");
+					//Serial.println(i,DEC);
 					//Serial.println(j,DEC);
 					//Serial.println(hash[j],HEX);
 					//Serial.println((md5str[j]),HEX);
@@ -1003,22 +1165,37 @@ boolean authenticate(char *md5str)
 			}
 			if(succeed == 1)
 			{
-				Serial.print("win: ");
-				serial_user_print(i);
+				read_EE_name(i);
+				read_EE_priv(i);
+				read_EE_hash(i);
+				//Serial.print("win: ");
+				//serial_user_print(i);
 				if(priv == 2||priv == 3||priv == 6||priv == 7||priv == 10||priv == 11||priv == 14||priv == 15)
 				{
 					can_add = 1;
-					Serial.println("can add");
+					//Serial.println("can add");
+				}
+				else
+				{
+					//Serial.println("cannot add");
 				}
 				if(priv == 4||priv == 5||priv == 6||priv == 7||priv == 12||priv == 13||priv == 14||priv == 15)
 				{
 					can_doorbell = 1;
-					Serial.println("can doorbell");
+					//Serial.println("can doorbell");
+				}
+				else
+				{
+					//Serial.println("cannot doorbell");
 				}
 				if(priv == 8||priv == 9||priv == 10||priv == 11||priv == 12||priv == 13||priv == 14||priv == 15)
 				{
 					can_doorhold = 1;
-					Serial.println("can door hold");
+					//Serial.println("can door hold");
+				}
+				else
+				{
+					//Serial.println("cannot door hold");
 				}
 				return 1;
 			}
@@ -1033,26 +1210,98 @@ void RFID_reset()
 	//RFID_start_time = 0; //not needed
 	tag_read = 0;
 	digit = 0;
+	new_tag_entry = 0;
 }
 
 void RFID_error_out()
 {
+	can_add = 0; //reset user capabilities
+	can_doorhold = 0; //reset user capabilities
+	can_doorbell = 0; //reset user capabilities
 	RFID_reset();
-	int d = 300;
-	beep_reader2(d);
-	delay(d);
-	beep_reader2(d);
-	delay(d);
-	beep_reader2(d);
+	beep_repeat(2,200,3);
+	LCD_default();
 }
+
+
+void beep_repeat(int reader,int time,int number)
+{
+	//Serial.print("beep repeat");
+	//Serial.print(" ");
+	//Serial.print(reader);
+	//Serial.print(" ");
+	//Serial.print(time);
+	//Serial.print(" ");
+	//Serial.println(number);
+	switch(reader){
+		case 0:{
+			for(int i = 0;i<number;i++)
+			{
+				beep_reader(0,time);
+				delay(time);
+			}
+		}
+		case 1:{
+			for(int i = 0;i<number;i++)
+			{
+				beep_reader(1,time);
+				delay(time);
+			}
+		}
+		case 2:{
+			for(int i = 0;i<number;i++)
+			{
+				beep_reader(1,time);
+				delay(time);
+			}
+		}
+		default:{
+		}
+	}
+}
+
+
+void beep_reader(int reader,int d)
+{
+	switch(reader){
+		case 0:{
+			digitalWrite(reader2led, 0);
+			digitalWrite(reader2buzz, 0);
+			digitalWrite(reader1led, 0);
+			digitalWrite(reader1buzz, 0);
+			delay(d);
+			digitalWrite(reader2led, 1);
+			digitalWrite(reader2buzz, 1);
+			digitalWrite(reader1led, 1);
+			digitalWrite(reader1buzz, 1);
+		}
+		case 1:{
+			digitalWrite(reader1led, 0);
+			digitalWrite(reader1buzz, 0);
+			delay(d);
+			digitalWrite(reader1led, 1);
+			digitalWrite(reader1buzz, 1);
+		}
+		case 2:{
+			digitalWrite(reader2led, 0);
+			digitalWrite(reader2buzz, 0);
+			delay(d);
+			digitalWrite(reader2led, 1);
+			digitalWrite(reader2buzz, 1);
+		}
+		default:{
+		}
+	}
+}
+
 
 void keypad_init()
 {
-	pinMode (keypad_clock, OUTPUT);
-	pinMode (keypad_input, INPUT);
-	pinMode (keypad_reset, OUTPUT);
-	digitalWrite(keypad_clock,0);
-	keypad_rst();
+	//pinMode (keypad_clock, OUTPUT);
+	//pinMode (keypad_input, INPUT);
+	//pinMode (keypad_reset, OUTPUT);
+	//digitalWrite(keypad_clock,0);
+	//keypad_rst();
 }
 
 void IO_init()
@@ -1082,6 +1331,7 @@ void RFID_init()
 	pinMode(reader2led, OUTPUT);
 	pinMode(reader2led2, OUTPUT);
 	digitalWrite(reader2led, 1); //active low
+	digitalWrite(reader2led2, 1); //active low
 	digitalWrite(reader2buzz, 1); //active low
 	attachInterrupt(pinToInterrupt[reader2Pins[1]], callReader2One,  CHANGE);
 	attachInterrupt(pinToInterrupt[reader2Pins[0]], callReader2Zero, CHANGE);
@@ -1092,6 +1342,7 @@ void RFID_init()
 	pinMode(reader1led, OUTPUT);
 	pinMode(reader1led2, OUTPUT);
 	digitalWrite(reader1led, 1); //active low
+	digitalWrite(reader1led2, 1); //active low
 	digitalWrite(reader1buzz, 1); //active low
 	attachInterrupt(pinToInterrupt[reader1Pins[1]], callReader1One,  CHANGE);
 	attachInterrupt(pinToInterrupt[reader1Pins[0]], callReader1Zero, CHANGE);
@@ -1107,24 +1358,6 @@ void EE_read_CMD_command()
 		Serial.print(command[i], HEX);
 	}
 	Serial.println();
-}
-
-void beep_reader2(int d)
-{
-	digitalWrite(reader2led, 0);
-	digitalWrite(reader2buzz, 0);
-	delay(d);
-	digitalWrite(reader2led, 1);
-	digitalWrite(reader2buzz, 1);
-}
-
-void beep_reader1(int d)
-{
-	digitalWrite(reader1led, 0);
-	digitalWrite(reader1buzz, 0);
-	delay(d);
-	digitalWrite(reader1led, 1);
-	digitalWrite(reader1buzz, 1);
 }
 
 void clear_pin() //not needed since I use an extrenal index, I think
@@ -1162,7 +1395,30 @@ void beep_command()
 	arg = SCmd.next(); 
 	if (arg != NULL) 
 	{
-		beep_reader2(atoi(arg));
+		if(atoi(arg) == 1)
+		{
+  			arg = SCmd.next(); 
+			if (arg != NULL) 
+			{
+				beep_reader(1,atoi(arg));
+			}
+		}
+		else if(atoi(arg) == 2)
+		{
+	 	 	arg = SCmd.next(); 
+			if (arg != NULL) 
+			{
+				beep_reader(2,atoi(arg));
+			}
+		}
+		else if(atoi(arg) == 0)
+		{
+	 	 	arg = SCmd.next(); 
+			if (arg != NULL) 
+			{
+				beep_reader(0,atoi(arg));
+			}
+		}
 	}
 }
 
@@ -1362,47 +1618,65 @@ void rtc_command()
 }
 
 
+void LCD_displn(String prints,int line)
+{
+	char printable[20];
+	prints.toCharArray(printable,sizeof(printable));
+	lcd.setCursor(line,0); // position cursor
+	delay(10);
+	lcd.write(printable);  // txt
+	delay(10);
+}
+
+void LCD_disp(String prints)
+{
+	char printable[20];
+	prints.toCharArray(printable,sizeof(printable));
+	lcd.write(printable);  // txt
+	delay(10);
+}
+
+void LCD_clear()
+{
+	lcd.clear(); //clear screen
+	//delay(10);
+}
+
+
 void display_command()    
 {
 	char *arg; 
-	//Serial.println("display"); 
 	arg = SCmd.next();
 	if (arg != NULL) 
 	{
 		if (atoi(arg) == 0)
 		{
-			//Serial.println("all");
 			arg = SCmd.next();
 			if (arg != NULL) 
 			{
-				iLCD.setCursor(0,0);
-				iLCD.print(arg);
+				LCD_displn(arg,0);
 			} 
 			else
 			{
-				iLCD.setCursor(0,0);
-				iLCD.print("                ");
+				LCD_displn("                ",0);
 			}
 		}
 		else if (atoi(arg) == 1)
 		{
-			//Serial.println("inside");
 			arg = SCmd.next();
 			if (arg != NULL) 
 			{
-				iLCD.setCursor(0,1);
-				iLCD.print(arg);
+				LCD_displn(arg,1);
 			} 
 			else
 			{
-				iLCD.setCursor(0,1);
-				iLCD.print("                ");
+				LCD_displn("                ",1);
 			}
 		}
 	}  
 	else 
 	{
-		iLCD.clear();
+		LCD_clear();
 	}
 }
 
@@ -1414,18 +1688,45 @@ void print_command()
 	arg = SCmd.next(); 
 	if (arg != NULL) 
 	{
-		String printable = arg;
-		for(int i=0;i<(sizeof(printable)/sizeof(printable[0]));i++)
-		{
-			printer(printable[i]);
-		}
-		printer(0x0d);
-		printer(0x0a);
-	} 
-	else {
-		//Serial.println("No arguments"); 
+		printerln(arg);
 	}
 }
+
+
+void printer(String printable)    
+{
+	//if (printable.length() != 0) 
+	//{
+		for(int i=0;i<printable.length();i++)
+		{
+			printing(printable[i]);
+		}
+	//} 
+	//else {
+		//Serial.println("No arguments"); 
+	//}
+}
+
+
+void printerln(String printable)    
+{
+	printer(printable);
+	printing(0x0d);
+	printing(0x0a);
+}
+
+void logging(String tolog)
+{
+	Serial.print(tolog);
+	printer(tolog);
+}
+
+void loggingln(String tolog)
+{
+	Serial.println(tolog);
+	printerln(tolog);
+}
+
 
 void battery_command()    
 {
@@ -1433,7 +1734,7 @@ void battery_command()
 }
 
 
-void printer(char buffer)
+void printing(char buffer)
 {
 	//Write out our buffer
 	for (int j = 0; j < sizeof(dataPins) / sizeof(dataPins[0]); ++j)
@@ -1458,19 +1759,39 @@ String logDate()
 {
 	String date;
 	ds1307.getDateDs1307(&second, &minute, &hour, &dayOfWeek, &dayOfMonth, &month, &year);
+	date+="20";//hack
+	date+=year;
+	date+="-";
+	if(month < 10)
+	{
+		date+="0";
+	}
+	date+=month;
+	date+="-";
+	if(dayOfMonth < 10)
+	{
+		date+="0";
+	}
+	date+=dayOfMonth;
+	date+='T';
+	if(hour < 10)
+	{
+		date+="0";
+	}
 	date+=hour;
 	date+=":";
+	if(minute < 10)
+	{
+		date+="0";
+	}
 	date+=minute;
 	date+=":";
+	if(second < 10)
+	{
+		date+="0";
+	}
 	date+=second;
-	date+="  ";
-	date+=month;
-	date+="/";
-	date+=dayOfMonth;
-	date+="/";
-	date+=year;
-	date+=' ';
-	  
+	date+=" ";
 	switch(dayOfWeek){
 		case 1:{
 			date+="SUN";
@@ -1501,7 +1822,6 @@ String logDate()
 			break;
 		}  
 	}
-	date+=" ";
 	return date;
 }
 
