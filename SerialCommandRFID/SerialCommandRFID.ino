@@ -152,6 +152,8 @@ void setup()
 	//format: DISP;<0=line 1, 1=line 2 (or no argument to clear the display)>;<string (or no argument to clear the line)>
 	SCmd.addCommand("PRINT",print_command);  // uses printer
 	//format: PRINT;<string>
+	SCmd.addCommand("CONTRAST",contrast_command);  // sets contrast
+	//format: CONTRAST;<analog value, 0-1024>
 	SCmd.addCommand("BAT",battery_command);  // reads battery voltage
 	//format: BAT
 	SCmd.addCommand("TEMP",temp_command);  // reads battery voltage
@@ -177,6 +179,8 @@ void setup()
 	logging(logDate());
 	logging(" - ");
 	loggingln("Rebooted"); 
+	check_battery(); //log battery at boot
+	temp_command(); //log temp at boot
 	LCD_default();
 	//populate_blank_users();
 	//write_EE(0,"Evan", 15, "9a7eaa8c16bd8073d32991d7ddc8a480");
@@ -402,7 +406,6 @@ float getTemp()
 	return tempFloat;
 }
 
-
 void LCD_init()
 {
 	analogWrite(contrast,cont_value);
@@ -455,15 +458,6 @@ void LCD_default()
 	}
 }
 
-
-/*
-void keypad_rst()
-{
-	digitalWrite(keypad_reset,0);
-	delay(1);
-	digitalWrite(keypad_reset,1);
-}
-*/
 void exit_timeout()
 {
 	logging(logDate());
@@ -482,7 +476,14 @@ void check_battery()
 	float voltage = (((float)analogRead(A15)*20.0)/1024.0);
 	if(voltage<voltage_threshold)
 	{
-		//battery voltage dropped low (alarm?)
+		battery_dur = 30000; //set to 5 mins
+		logging(logDate());
+		logging(" - ");
+		loggingln("battery voltage dropped below threshold");
+	}
+	else
+	{
+		battery_dur = 3600000; //set to 1 hour mins
 	}
 	log_battery();
 }
@@ -528,6 +529,7 @@ void exit_doorbell_mode()
 	doorbell_start = 0;
 	can_doorbell = 0;
 }
+
 void enter_doorbell_mode()
 {
 	logging(logDate());
@@ -553,6 +555,7 @@ void exit_doorhold_mode()
 	doorhold_start = 0;
 	can_doorhold = 0;
 }
+
 void enter_doorhold_mode()
 {
 	logging(logDate());
@@ -565,6 +568,7 @@ void enter_doorhold_mode()
 	doorhold_start = millis();
 	can_doorhold = 0;
 }
+
 void enter_new_tag_entry_mode()
 {
 	logging(logDate());
@@ -620,17 +624,6 @@ void new_user_entry()
 		char hashed[32];
 		toHash.toCharArray(hashed,32); 
 		char *md5str = MD5::make_digest(MD5::make_hash(hashed), 16);
-		//if(authenticate(md5str) == 1)
-		//{
-		//	exiting = 1;
-		//	exit_start_time = millis();
-		//	digitalWrite(relaysToPins[exit_relay], HIGH);
-		//}
-		//else
-		//{
-		//	RFID_error_out();
-		//}
-
 		for (int i=0;i<num_users;i++)
 		{
 			if(!user_present(i))
@@ -1680,6 +1673,21 @@ void display_command()
 	}
 }
 
+void contrast_command()    
+{
+	char *arg; 
+	//Serial.println("contrast"); 
+	arg = SCmd.next(); 
+	if (arg != NULL) 
+	{
+		cont_value = atoi(arg);
+	}
+	else
+	{
+		//set contrast by temp value
+	}
+	analogWrite(contrast,cont_value);
+}
 
 void print_command()    
 {
